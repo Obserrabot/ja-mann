@@ -13,64 +13,82 @@ class RobotNavigator:
     def __init__(self, raspberry_ip: str = "chainmasters.local", command_port: int = 8081):
         self.raspberry_ip = raspberry_ip
         self.command_port = command_port
-        
         # Entscheidungs-Stabilität
         self.last_target = None
         self.last_decision_time = 0
         self.decision_cooldown = 2.0  # 2 Sekunden zwischen Entscheidungen
         self.target_reached_distance = 50  # Pixel-Abstand für "erreicht"
-        
         # Connection Management
         self.connection_failed = False
         self.last_connection_attempt = 0
         self.connection_retry_delay = 5.0  # 5 Sekunden zwischen Verbindungsversuchen
         self.is_connected = False
-        
+        self.sock = None
+        self.sock_lock = None
         # Roboter Position (wird vom Raspberry gesendet oder geschätzt)
         self.robot_position = (320, 240)  # Mitte des Bildes als Start
-        
         print(f"🤖 Robot Navigator initialisiert für {raspberry_ip}:{command_port}")
+        self._init_socket()
+
+    def _init_socket(self):
+        import threading
+        self.sock_lock = threading.Lock()
+        try:
+            self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.sock.settimeout(2.0)
+            self.sock.connect((self.raspberry_ip, self.command_port))
+            self.is_connected = True
+            self.connection_failed = False
+            print(f"🔗 Verbindung zum Roboter aufgebaut!")
+        except Exception as e:
+            self.sock = None
+            self.is_connected = False
+            self.connection_failed = True
+            self.last_connection_attempt = time.time()
+            print(f"❌ Konnte Verbindung nicht aufbauen: {e}")
+
+    def _close_socket(self):
+        if self.sock:
+            try:
+                self.sock.close()
+            except Exception:
+                pass
+            self.sock = None
+            self.is_connected = False
     
     def send_command_to_robot(self, command: dict) -> bool:
         """
-        Sendet Kommando per TCP/UDP an den Raspberry Pi
-        Mit Connection-Retry Management (5 Sek Delay bei Fehlern)
+        Sendet Kommando per TCP an den Raspberry Pi über persistente Verbindung
         """
+        import threading
         current_time = time.time()
-        
         # Überprüfe ob Verbindung kürzlich fehlgeschlagen ist
         if self.connection_failed and (current_time - self.last_connection_attempt) < self.connection_retry_delay:
             return False  # Noch im Cooldown
-        
+        # Versuche ggf. Reconnect
+        if not self.sock or not self.is_connected:
+            self._init_socket()
+            if not self.sock or not self.is_connected:
+                return False
         try:
-            # TCP Socket für zuverlässige Übertragung
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-                sock.settimeout(0.5)  # Kurzer Timeout für non-blocking
-                sock.connect((self.raspberry_ip, self.command_port))
-                
+            with self.sock_lock:
                 message = json.dumps(command).encode('utf-8')
-                sock.send(message)
-                
-                # Antwort vom Roboter lesen
-                response = sock.recv(1024).decode('utf-8')
-                
-                # Verbindung erfolgreich
+                self.sock.sendall(message)
+                response = self.sock.recv(1024).decode('utf-8')
                 self.connection_failed = False
                 self.is_connected = True
                 print(f"🤖 Roboter Antwort: {response}")
                 return True
-                
         except Exception as e:
-            # Verbindung fehlgeschlagen
             self.connection_failed = True
             self.is_connected = False
             self.last_connection_attempt = current_time
-            
-            # Nur beim ersten Fehler loggen, dann stumm für 5 Sek
-            if current_time - self.last_connection_attempt < 0.1:  # Erster Fehler
-                print(f"❌ Roboter offline - retry in {self.connection_retry_delay}s: {e}")
-            
+            self._close_socket()
+            print(f"❌ Roboter offline - retry in {self.connection_retry_delay}s: {e}")
             return False
+    def close(self):
+        """Verbindung zum Roboter sauber schließen."""
+        self._close_socket()
     
     def calculate_mecanum_movement(self, target_x: int, target_y: int, robot_x: int, robot_y: int) -> dict:
         """
