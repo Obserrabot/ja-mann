@@ -2,6 +2,9 @@
 
 Ein KI-gesteuerter Roboter mit Mecanum-Rädern, der automatisch Bälle auf einer 1x1m Fläche einsammelt.
 
+Note:
+
+venv aktivieren im root mit .\.venv\Scripts\Activate.ps1
 ## 🎯 System-Übersicht
 
 ```

@@ -16,8 +16,9 @@ class RobotNavigator:
         # Entscheidungs-Stabilität
         self.last_target = None
         self.last_decision_time = 0
-        self.decision_cooldown = 2.0  # 2 Sekunden zwischen Entscheidungen
+        self.decision_cooldown = 3.0  # 3 Sekunden zwischen Entscheidungen (erhöht!)
         self.target_reached_distance = 50  # Pixel-Abstand für "erreicht"
+        self.group_memory = {}  # Speichert Gruppen-Historie für Stabilität
         # Connection Management
         self.connection_failed = False
         self.last_connection_attempt = 0
@@ -26,7 +27,7 @@ class RobotNavigator:
         self.sock = None
         self.sock_lock = None
         # Roboter Position (wird vom Raspberry gesendet oder geschätzt)
-        self.robot_position = (320, 240)  # Mitte des Bildes als Start
+        self.robot_position = (960, 800)  # Unten-Mitte im 1920x1080 Bild (realistischer!)
         print(f"🤖 Robot Navigator initialisiert für {raspberry_ip}:{command_port}")
         self._init_socket()
 
@@ -145,12 +146,12 @@ class RobotNavigator:
     def select_best_target(self, ball_groups: List[List[Tuple[int, int]]]) -> Optional[Tuple[int, int]]:
         """
         Wählt die beste Ball-Gruppe zum Anfahren aus
-        Priorisiert: Größe der Gruppe, Entfernung, Stabilität
+        Priorisiert: Größe der Gruppe, Entfernung, Stabilität (VERBESSERT)
         """
         if not ball_groups:
             return None
         
-        # Bewertung jeder Gruppe
+        # Bewertung jeder Gruppe mit verbesserter Stabilität
         best_group = None
         best_score = -1
         
@@ -166,15 +167,20 @@ class RobotNavigator:
             distance = math.sqrt((center_x - self.robot_position[0])**2 + 
                                (center_y - self.robot_position[1])**2)
             
-            # Score Berechnung:
+            # Score Berechnung (überarbeitet für mehr Stabilität):
             # - Anzahl Bälle (wichtigster Faktor)
             # - Nähe zum Roboter (sekundär)
-            # - Stabilität (wenn es das letzte Ziel war)
-            ball_count_score = len(group) * 100
-            distance_score = max(0, 300 - distance)  # Näher = besser
-            stability_score = 50 if (self.last_target and 
-                                   abs(center_x - self.last_target[0]) < 100 and 
-                                   abs(center_y - self.last_target[1]) < 100) else 0
+            # - STARKE Stabilität (wenn es das letzte Ziel war)
+            ball_count_score = len(group) * 150  # Erhöht: Gruppengroße wichtiger
+            distance_score = max(0, 200 - distance * 0.5)  # Reduziert: Entfernung weniger wichtig
+            
+            # MASSIVE Stabilität für aktuelles Ziel (verhindert Springen)
+            stability_score = 0
+            if self.last_target:
+                target_distance = math.sqrt((center_x - self.last_target[0])**2 + 
+                                          (center_y - self.last_target[1])**2)
+                if target_distance < 150:  # Größerer Toleranzbereich
+                    stability_score = 300  # SEHR hoher Bonus für aktuelles Ziel
             
             total_score = ball_count_score + distance_score + stability_score
             
@@ -211,10 +217,10 @@ class RobotNavigator:
         
         target_x, target_y, ball_count = target
         
-        # Nur neue Entscheidung treffen wenn sich das Ziel signifikant geändert hat
+        # Nur neue Entscheidung treffen wenn sich das Ziel SIGNIFIKANT geändert hat
         if (self.last_target is None or 
-            abs(target_x - self.last_target[0]) > 80 or 
-            abs(target_y - self.last_target[1]) > 80):
+            abs(target_x - self.last_target[0]) > 120 or  # Erhöht: weniger empfindlich
+            abs(target_y - self.last_target[1]) > 120):   # Verhindert Ziel-Wechsel bei kleinen Schwankungen
             
             self.last_target = (target_x, target_y)
             self.last_decision_time = current_time

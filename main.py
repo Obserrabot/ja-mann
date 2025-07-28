@@ -112,9 +112,9 @@ while True:
                            device=device,
                            half=True,
                            verbose=False,
-                           conf=0.25,  # Höchste Erkennungsqualität
-                           iou=0.5,    # Präziser
-                           max_det=100, # Mehr Detektionen
+                           conf=0.15,  # NIEDRIGER für mehr Ball-Detektionen
+                           iou=0.3,    # NIEDRIGER für überlappende Bälle
+                           max_det=200, # MEHR Detektionen
                            augment=True)
     else:
         # CPU oder GPU ohne AMP
@@ -123,9 +123,9 @@ while True:
                        device=device,
                        half=False,  # CPU unterstützt kein FP16
                        verbose=False,
-                       conf=0.3,
-                       iou=0.5,
-                       max_det=60,
+                       conf=0.2,    # NIEDRIGER für CPU
+                       iou=0.3,     # NIEDRIGER für überlappende Bälle
+                       max_det=150, # MEHR Detektionen
                        augment=True)
     # Alle Ball-Mittelpunkte sammeln
     ball_centers = []
@@ -144,25 +144,48 @@ while True:
             cv2.circle(frame, (cx, cy), 5, (0, 0, 255), -1)
             cv2.putText(frame, f"{conf:.2f}", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
 
-    # Ball-Gruppen nach Abstand clustern
-    def group_balls(centers, max_dist=100):
+    # Ball-Gruppen nach Abstand clustern (STABILISIERT)
+    def group_balls(centers, max_dist=120):
+        if not centers:
+            return []
+        
         groups = []
         used = set()
-        for i, (x1, y1) in enumerate(centers):
+        
+        # Sortiere Bälle nach Position für konsistente Gruppierung
+        sorted_centers = sorted(centers, key=lambda p: (p[0], p[1]))
+        
+        for i, (x1, y1) in enumerate(sorted_centers):
             if i in used:
                 continue
             group = [(x1, y1)]
             used.add(i)
-            for j, (x2, y2) in enumerate(centers):
+            
+            # Erweiterte Suche für stabile Gruppen
+            for j, (x2, y2) in enumerate(sorted_centers):
                 if j != i and j not in used:
                     dist = ((x1-x2)**2 + (y1-y2)**2)**0.5
                     if dist < max_dist:
                         group.append((x2, y2))
                         used.add(j)
-            groups.append(group)
+                        
+                        # Erweitere Gruppe rekursiv (Ketten-Clustering)
+                        for k, (x3, y3) in enumerate(sorted_centers):
+                            if k not in used:
+                                for gx, gy in group:
+                                    chain_dist = ((gx-x3)**2 + (gy-y3)**2)**0.5
+                                    if chain_dist < max_dist:
+                                        group.append((x3, y3))
+                                        used.add(k)
+                                        break
+            
+            # Nur Gruppen mit min. Größe behalten (reduziert Flackern)
+            if len(group) >= 1:  # Einzelbälle auch erlauben
+                groups.append(group)
+        
         return groups
 
-    ball_groups = group_balls(ball_centers, max_dist=100)
+    ball_groups = group_balls(ball_centers, max_dist=120)
     num_groups = len(ball_groups)
     cv2.putText(frame, f"Ball-Gruppen: {num_groups}", (10, 150), cv2.FONT_HERSHEY_SIMPLEX, 1, (50, 50, 200), 2)
     
@@ -186,7 +209,7 @@ while True:
     else:
         navigation_success = False
         status_color = (128, 128, 128)  # Grau
-        status_text = "Roboter: Keine Bälle"
+        status_text = "Roboter: Keine Baelle"
     
     cv2.putText(frame, status_text, (10, 190), cv2.FONT_HERSHEY_SIMPLEX, 0.8, status_color, 2)
     
@@ -196,6 +219,12 @@ while True:
         cv2.circle(frame, (target_x, target_y), 20, (255, 0, 255), 3)
         cv2.putText(frame, "ZIEL", (target_x-20, target_y-30), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 255), 2)
+    
+    # ROBOTER POSITION anzeigen (wo der Bot denkt dass er steht)
+    robot_x, robot_y = robot_navigator.robot_position
+    cv2.circle(frame, (robot_x, robot_y), 15, (0, 255, 255), 3)  # Gelber Kreis
+    cv2.putText(frame, "ROBOT", (robot_x-25, robot_y-20), 
+               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
     
     print(f"Ball-Gruppen erkannt: {num_groups}")
 
